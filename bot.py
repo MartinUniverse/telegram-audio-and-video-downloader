@@ -243,6 +243,26 @@ def handle_text(message: types.Message):
             message.chat.id,
             "Пришли ссылку на видео или используй /audio /video",
         )
+        
+# -------------СЕРВЕР-----------
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
+
+PORT = int(os.environ.get("PORT", 5000))
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"I'm alive!")
+
+def run_http_server():
+    httpd = HTTPServer(("", PORT), SimpleHandler)
+    httpd.serve_forever()
+
+# запуск маленького веб-сервера в отдельном потоке
+threading.Thread(target=run_http_server).start()
 
 
 # ---------- ЗАПУСК ----------
@@ -250,3 +270,4 @@ def handle_text(message: types.Message):
 if __name__ == "__main__":
     print("Бот запущен. Нажми Ctrl+C для остановки.")
     bot.infinity_polling(skip_pending=True)
+
