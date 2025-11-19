@@ -10,10 +10,6 @@ from telebot import types
 import yt_dlp
 import requests
 
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import os
-
 # ---------- НАСТРОЙКИ ----------
 
 load_dotenv()
@@ -248,27 +244,30 @@ def handle_text(message: types.Message):
             "Пришли ссылку на видео или используй /audio /video",
         )
         
-# -------------СЕРВЕР-----------
-PORT = int(os.environ.get("PORT", 5000))
+# --------------------------- RENDER KEEP-ALIVE SERVER ---------------------------
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
 
-class SimpleHandler(BaseHTTPRequestHandler):
+class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"I'm alive!")
+        self.wfile.write(b"Bot is running")
 
-def run_http_server():
-    httpd = HTTPServer(("", PORT), SimpleHandler)
-    httpd.serve_forever()
+def run_keepalive_server():
+    port = int(os.environ.get("PORT", 5000))  # Render автоматически задаёт PORT
+    server = HTTPServer(("", port), KeepAliveHandler)
+    server.serve_forever()
 
-# запуск маленького веб-сервера в отдельном потоке
-threading.Thread(target=run_http_server).start()
-
+# Запуск мини-сервера в отдельном потоке
+threading.Thread(target=run_keepalive_server, daemon=True).start()
 
 # ---------- ЗАПУСК ----------
 
 if __name__ == "__main__":
     print("Бот запущен. Нажми Ctrl+C для остановки.")
     bot.infinity_polling(skip_pending=True)
+
 
 
