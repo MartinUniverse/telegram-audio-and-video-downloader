@@ -263,11 +263,30 @@ def run_keepalive_server():
 # Запуск мини-сервера в отдельном потоке
 threading.Thread(target=run_keepalive_server, daemon=True).start()
 
+ # ---------- основной цикл polling с авто-перезапуском ----------
+    while True:
+        try:
+            print("Starting polling...")
+            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+        except apihelper.ApiTelegramException as e:
+            # Игнорируем конфликт 409 и просто пробуем ещё раз
+            if e.error_code == 409:
+                print("Got 409 conflict from Telegram, retrying in 10s...")
+                time.sleep(10)
+                continue
+            else:
+                print(f"Telegram API error: {e}, retrying in 10s...")
+                time.sleep(10)
+        except Exception as e:
+            print(f"Unexpected error: {e}, retrying in 10s...")
+            time.sleep(10)
+
 # ---------- ЗАПУСК ----------
 
 if __name__ == "__main__":
     print("Бот запущен. Нажми Ctrl+C для остановки.")
     bot.infinity_polling(skip_pending=True)
+
 
 
 
