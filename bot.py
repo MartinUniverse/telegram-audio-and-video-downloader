@@ -2,10 +2,13 @@ import os
 import re
 import tempfile
 import shutil
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
 import telebot
-from telebot import types
+from telebot import types, apihelper
 
 import yt_dlp
 import requests
@@ -16,7 +19,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise RuntimeError("В .env нет BOT_TOKEN")
+    raise RuntimeError("В окружении нет BOT_TOKEN")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
@@ -79,11 +82,7 @@ def upload_to_gofile(file_path: str) -> str:
             timeout=300,
         )
 
-    try:
-        data = resp.json()
-    except Exception:
-        raise RuntimeError(f"Gofile вернул не JSON: {resp.text[:500]}")
-
+    data = resp.json()
     status = data.get("status")
     if status not in ("ok", "success"):
         raise RuntimeError(f"Ошибка от Gofile: {data}")
@@ -100,7 +99,8 @@ def upload_to_gofile(file_path: str) -> str:
 # ---------- ЛОГИКА АУДИО ----------
 
 def process_audio(message: types.Message, url: str):
-    wait = bot.send_message(message.chat.id, "🎧 Качаю аудио...")
+    chat_id = message.chat.id
+    bot.send_message(chat_id, "🎧 Качаю аудио, подожди...")
 
     file_path = None
     tmp_dir = None
@@ -110,50 +110,44 @@ def process_audio(message: types.Message, url: str):
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         if size_mb > 49:
-            bot.edit_message_text(
-                chat_id=wait.chat.id,
-                message_id=wait.message_id,
-                text=f"⚠️ Аудио получилось {size_mb:.1f} МБ — больше лимита Телеграма (50 МБ).\n"
-                     f"Попробуй более короткое видео.",
+            bot.send_message(
+                chat_id,
+                f"⚠️ Аудио получилось {size_mb:.1f} МБ — больше лимита Телеграма для ботов (50 МБ).\n"
+                f"Попробуй более короткое видео.",
             )
             return
 
-        with open(file_path, "rb") as f:
-            # Не удаляем сообщение до успешной отправки!
-            bot.send_audio(
-                message.chat.id,
-                f,
-                caption=f"Аудио с YouTube ({size_mb:.1f} МБ)",
-                timeout=60000,  # даём до 1000 минут на заливку
+        try:
+            with open(file_path, "rb") as f:
+                bot.send_audio(
+                    chat_id,
+                    f,
+                    caption=f"Аудио с YouTube ({size_mb:.1f} МБ)",
+                    timeout=600,
+                )
+            bot.send_message(chat_id, f"✅ Готово! ({size_mb:.1f} МБ)")
+        except Exception as send_err:
+            bot.send_message(
+                chat_id,
+                f"❌ Не удалось отправить файл в Телеграм (таймаут или сеть):\n{send_err}",
             )
-
-        # Если всё прошло хорошо — теперь можно удалить "Качаю аудио..."
-        bot.delete_message(wait.chat.id, wait.message_id)
 
     except Exception as e:
-        # Если сообщение уже удалено или не найдено — просто пишем новое
-        try:
-            bot.edit_message_text(
-                chat_id=wait.chat.id,
-                message_id=wait.message_id,
-                text=f"❌ Ошибка при скачивании аудио:\n{e}",
-            )
-        except Exception:
-            bot.send_message(
-                message.chat.id,
-                f"❌ Ошибка при скачивании аудио:\n{e}",
-            )
+        bot.send_message(
+            chat_id,
+            f"❌ Ошибка при скачивании аудио:\n{e}",
+        )
 
     finally:
         if tmp_dir and os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir)
 
 
-
 # ---------- ЛОГИКА ВИДЕО ----------
 
 def process_video(message: types.Message, url: str):
-    wait = bot.send_message(message.chat.id, "📹 Качаю видео, подожди...")
+    chat_id = message.chat.id
+    wait = bot.send_message(chat_id, "📹 Качаю видео, подожди...")
 
     file_path = None
     tmp_dir = None
@@ -181,11 +175,17 @@ def process_video(message: types.Message, url: str):
         )
 
     except Exception as e:
-        bot.edit_message_text(
-            chat_id=wait.chat.id,
-            message_id=wait.message_id,
-            text=f"❌ Ошибка при обработке видео:\n{e}",
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=wait.chat.id,
+                message_id=wait.message_id,
+                text=f"❌ Ошибка при обработке видео:\n{e}",
+            )
+        except Exception:
+            bot.send_message(
+                chat_id,
+                f"❌ Ошибка при обработке видео:\n{e}",
+            )
 
     finally:
         if tmp_dir and os.path.exists(tmp_dir):
@@ -243,35 +243,37 @@ def handle_text(message: types.Message):
             message.chat.id,
             "Пришли ссылку на видео или используй /audio /video",
         )
-        
-# --------------------------- RENDER KEEP-ALIVE SERVER ---------------------------
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import os
+
+
+# ---------- HTTP-СЕРВЕР ДЛЯ RENDER И ЦИКЛ POLLING ----------
 
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running")
+        self.wfile.write(b"Bot is alive!")
+
 
 def run_keepalive_server():
-    port = int(os.environ.get("PORT", 5000))  # Render автоматически задаёт PORT
+    port = int(os.environ.get("PORT", 5000))
     server = HTTPServer(("", port), KeepAliveHandler)
     server.serve_forever()
 
-# Запуск мини-сервера в отдельном потоке
-threading.Thread(target=run_keepalive_server, daemon=True).start()
 
- # ---------- основной цикл polling с авто-перезапуском ----------
+if __name__ == "__main__":
+    print("Bot starting...")
+
+    # мини-сервер, чтобы Render видел открытый порт
+    threading.Thread(target=run_keepalive_server, daemon=True).start()
+
+    # основной цикл polling с авто-перезапуском
     while True:
         try:
             print("Starting polling...")
             bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
         except apihelper.ApiTelegramException as e:
-            # Игнорируем конфликт 409 и просто пробуем ещё раз
             if e.error_code == 409:
-                print("Got 409 conflict from Telegram, retrying in 10s...")
+                print("409 conflict, retrying in 10s...")
                 time.sleep(10)
                 continue
             else:
@@ -280,13 +282,3 @@ threading.Thread(target=run_keepalive_server, daemon=True).start()
         except Exception as e:
             print(f"Unexpected error: {e}, retrying in 10s...")
             time.sleep(10)
-
-# ---------- ЗАПУСК ----------
-
-if __name__ == "__main__":
-    print("Бот запущен. Нажми Ctrl+C для остановки.")
-    bot.infinity_polling(skip_pending=True)
-
-
-
-
