@@ -10,6 +10,10 @@ from telebot import types
 import yt_dlp
 import requests
 
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
+
 # ---------- НАСТРОЙКИ ----------
 
 load_dotenv()
@@ -245,10 +249,6 @@ def handle_text(message: types.Message):
         )
         
 # -------------СЕРВЕР-----------
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import os
-
 PORT = int(os.environ.get("PORT", 5000))
 
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -270,4 +270,5 @@ threading.Thread(target=run_http_server).start()
 if __name__ == "__main__":
     print("Бот запущен. Нажми Ctrl+C для остановки.")
     bot.infinity_polling(skip_pending=True)
+
 
